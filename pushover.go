@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,9 +16,10 @@ import (
 )
 
 type Notification struct {
-	Title   string `json:"title"`
-	Message string `json:"message"`
-	Icon    string `json:"icon,omitempty"`
+	Title    string `json:"title"`
+	Message  string `json:"message"`
+	Icon     string `json:"icon,omitempty"`
+	IconByte []byte `json:"-,omitempty"`
 }
 
 type AppConfig struct {
@@ -31,16 +33,14 @@ func NewNotificationService() *NotificationService {
 	return &NotificationService{}
 }
 
-func (s *NotificationService) SendNotification(
-	title, message, icon string,
-) error {
+func (s *NotificationService) SendNotification(title, message string, icon any) error {
 	if err := beeep.Notify(title, message, icon); err != nil {
 		return fmt.Errorf("Failed to send notification: %w", err)
 	}
 	return nil
 }
 
-func (s *NotificationService) SendAlert(title, message, icon string) error {
+func (s *NotificationService) SendAlert(title, message string, icon any) error {
 	if err := beeep.Alert(title, message, icon); err != nil {
 		return fmt.Errorf("Failed to send alert: %w", err)
 	}
@@ -64,9 +64,18 @@ func parseNotificationRequest(r *http.Request, notification *Notification,
 	if err := json.NewDecoder(r.Body).Decode(notification); err != nil {
 		return fmt.Errorf("invalid request payload: %w", err)
 	}
+
 	if notification.Title == "" || notification.Message == "" {
 		return fmt.Errorf("title and message are required")
 	}
+
+	if notification.Icon != "" {
+		data, err := base64.StdEncoding.DecodeString(notification.Icon)
+		if err == nil {
+			notification.IconByte = data
+		}
+	}
+
 	return nil
 }
 
@@ -77,11 +86,7 @@ func (s *NotificationService) handleNotification(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if err := s.SendNotification(
-		notification.Title,
-		notification.Message,
-		notification.Icon,
-	); err != nil {
+	if err := s.SendNotification(notification.Title, notification.Message, notification.IconByte); err != nil {
 		writeJSONResponse(
 			w,
 			http.StatusInternalServerError,
@@ -104,7 +109,7 @@ func (s *NotificationService) handleAlert(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := s.SendAlert(notification.Title, notification.Message, notification.Icon); err != nil {
+	if err := s.SendAlert(notification.Title, notification.Message, notification.IconByte); err != nil {
 		writeJSONResponse(
 			w,
 			http.StatusInternalServerError,
