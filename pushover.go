@@ -164,6 +164,20 @@ func setupRouter(ns *NotificationService) http.Handler {
 			map[string]string{"message": "Pushover Desktop Notification Service is running"},
 		)
 	})
+	r.Get("/notification", func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResponse(
+			w,
+			http.StatusOK,
+			map[string]string{"message": "/notification endpoint is healthy"},
+		)
+	})
+	r.Get("/alert", func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResponse(
+			w,
+			http.StatusOK,
+			map[string]string{"message": "/alert endpoint is healthy"},
+		)
+	})
 
 	r.Post("/notification", ns.handleNotification)
 	r.Post("/alert", ns.handleAlert)
