@@ -1,5 +1,6 @@
 # Pushover Desktop
 This Go application acts as a lightweight HTTP server that receives notification requests and displays them as desktop notifications on the local machine using `beeep`.
+Desktop client for [Pushover Android](https://github.com/ana117/pushover-android).
 
 
 ## Features
