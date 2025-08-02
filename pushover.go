@@ -9,34 +9,121 @@ import (
 	"time"
 
 	"github.com/gen2brain/beeep"
-	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/joho/godotenv"
 )
 
 type Notification struct {
 	Title   string `json:"title"`
 	Message string `json:"message"`
-	Icon    string `json:"icon"`
+	Icon    string `json:"icon,omitempty"`
 }
 
-func sendNotification(title, message, icon string) error {
+type AppConfig struct {
+	Port    string
+	AppName string
+}
+
+type NotificationService struct{}
+
+func NewNotificationService() *NotificationService {
+	return &NotificationService{}
+}
+
+func (s *NotificationService) SendNotification(
+	title, message, icon string,
+) error {
 	if err := beeep.Notify(title, message, icon); err != nil {
 		return fmt.Errorf("Failed to send notification: %w", err)
 	}
 	return nil
 }
-func sendAlert(title, message, icon string) error {
+
+func (s *NotificationService) SendAlert(title, message, icon string) error {
 	if err := beeep.Alert(title, message, icon); err != nil {
 		return fmt.Errorf("Failed to send alert: %w", err)
 	}
 	return nil
 }
 
-func main() {
+type APIError struct {
+	Message string `json:"message"`
+}
+
+func writeJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("Error writing JSON response: %v", err)
+	}
+}
+
+func parseNotificationRequest(r *http.Request, notification *Notification,
+) error {
+	if err := json.NewDecoder(r.Body).Decode(notification); err != nil {
+		return fmt.Errorf("invalid request payload: %w", err)
+	}
+	if notification.Title == "" || notification.Message == "" {
+		return fmt.Errorf("title and message are required")
+	}
+	return nil
+}
+
+func (s *NotificationService) handleNotification(w http.ResponseWriter, r *http.Request) {
+	var notification Notification
+	if err := parseNotificationRequest(r, &notification); err != nil {
+		writeJSONResponse(w, http.StatusBadRequest, APIError{Message: err.Error()})
+		return
+	}
+
+	if err := s.SendNotification(
+		notification.Title,
+		notification.Message,
+		notification.Icon,
+	); err != nil {
+		writeJSONResponse(
+			w,
+			http.StatusInternalServerError,
+			APIError{Message: "Failed to send notification: " + err.Error()},
+		)
+		return
+	}
+
+	writeJSONResponse(
+		w,
+		http.StatusOK,
+		map[string]string{"message": "Notification sent successfully"},
+	)
+}
+
+func (s *NotificationService) handleAlert(w http.ResponseWriter, r *http.Request) {
+	var notification Notification
+	if err := parseNotificationRequest(r, &notification); err != nil {
+		writeJSONResponse(w, http.StatusBadRequest, APIError{Message: err.Error()})
+		return
+	}
+
+	if err := s.SendAlert(notification.Title, notification.Message, notification.Icon); err != nil {
+		writeJSONResponse(
+			w,
+			http.StatusInternalServerError,
+			APIError{Message: "Failed to send alert: " + err.Error()},
+		)
+		return
+	}
+
+	writeJSONResponse(
+		w,
+		http.StatusOK,
+		map[string]string{"message": "Alert sent successfully"},
+	)
+}
+
+func loadConfig() (*AppConfig, error) {
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file")
+		log.Println("No .env file found or error loading .env file:", err)
 	}
 
 	port := os.Getenv("PORT")
@@ -50,11 +137,15 @@ func main() {
 	}
 	beeep.AppName = appName
 
-	handler(fmt.Sprintf(":%s", port))
+	return &AppConfig{
+		Port:    port,
+		AppName: appName,
+	}, nil
 }
 
-func handler(address string) error {
+func setupRouter(ns *NotificationService) http.Handler {
 	r := chi.NewRouter()
+
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
@@ -62,63 +153,33 @@ func handler(address string) error {
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Pushover Desktop Notification Service is running"))
+		writeJSONResponse(
+			w,
+			http.StatusOK,
+			map[string]string{"message": "Pushover Desktop Notification Service is running"},
+		)
 	})
 
-	r.Post("/notification", func(w http.ResponseWriter, r *http.Request) {
-		var notification Notification
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewDecoder(r.Body).Decode(&notification); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"message": "Invalid request payload: " + err.Error()})
-			return
-		}
-		if notification.Title == "" || notification.Message == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"message": "Title and message are required"})
-			return
-		}
+	r.Post("/notification", ns.handleNotification)
+	r.Post("/alert", ns.handleAlert)
 
-		if err := sendNotification(notification.Title, notification.Message, notification.Icon); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"message": "Failed to send notification: " + err.Error()})
-			return
-		}
+	return r
+}
 
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"message": "Notification sent successfully"})
-	})
-
-	r.Post("/alert", func(w http.ResponseWriter, r *http.Request) {
-		var notification Notification
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewDecoder(r.Body).Decode(&notification); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"message": "Invalid request payload: " + err.Error()})
-			return
-		}
-		if notification.Title == "" || notification.Message == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"message": "Title and message are required"})
-			return
-		}
-
-		if err := sendAlert(notification.Title, notification.Message, notification.Icon); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"message": "Failed to send alert: " + err.Error()})
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"message": "Alert sent successfully"})
-	})
-
-	err := http.ListenAndServe(address, r)
+func main() {
+	config, err := loadConfig()
 	if err != nil {
-		log.Printf("Error listening and serving!")
-		log.Fatal(err)
-		return err
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
-	return nil
+
+	notificationService := NewNotificationService()
+	router := setupRouter(notificationService)
+
+	address := fmt.Sprintf(":%s", config.Port)
+	log.Printf("Server starting on %s...", address)
+
+	err = http.ListenAndServe(address, router)
+	if err != nil {
+		log.Fatalf("Server failed to start: %v", err)
+	}
 }
