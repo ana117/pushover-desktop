@@ -182,6 +182,14 @@ func setupRouter(ns *NotificationService) http.Handler {
 	r.Post("/notification", ns.handleNotification)
 	r.Post("/alert", ns.handleAlert)
 
+	r.Get("/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResponse(w, http.StatusOK, map[string]string{"message": "Server is shutting down"})
+		go func() {
+			time.Sleep(1 * time.Second)
+			os.Exit(0)
+		}()
+	})
+
 	return r
 }
 
